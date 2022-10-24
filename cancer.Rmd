@@ -1,0 +1,162 @@
+---
+title: "Cancer Malignancy Prediction"
+author: "Cameron Mirhossaini"
+date: 'June 2022'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(faraway)
+library(car)
+library(MASS)
+```
+
+\pagebreak
+```{r}
+library(faraway)
+library(car)
+library(MASS)
+
+tumor <- read.table("brca.txt", header = T)
+attach(tumor)
+t.glm <- glm(formula = Class ~ ., family = binomial, tumor)
+summary(t.glm)
+
+```
+Residual deviance:  86.187  on 659  degrees of freedom
+Yes, we can look at the chi-squared value of Null Deviance - Residual Deviance
+ = 781 with 9 degrees of freedom. Thus gives us a p-value  < .01, indicating this
+ model is highly useful for the scope of this course, though more care will be
+ needed in determining goodness of fit.
+\pagebreak
+```{r}
+
+AIC_b <- step(t.glm, scope=list(lower= ~ BNuclei, 
+                                 upper=~ Adhesion + BNuclei + Chromat + Epithel + Mitoses 
+                                + NNucleo + ClThick + UShape + UCSize), 
+              direction="both", data=tumor)
+
+#AIC is 102.3
+best.t.glm <- glm(Class ~ Adhesion + BNuclei + Chromat + Mitoses + 
+                    NNucleo + ClThick + UShape, family = binomial, tumor)
+
+
+```
+Our model:Class ~ Adhesion + BNuclei + Chromat + Mitoses + NNucleo + ClThick + UShape
+
+\pagebreak
+```{r}
+pred <- predict(best.t.glm, newdata= data.frame(Adhesion = 1, BNuclei=1, Chromat=3, Epithel=2, Mitoses=1,
+                                                NNucleo=1, ClThick=4, UShape=1, UCSize=1), 
+                se.fit = T,type = "link")
+
+pred.low <- pred$fit - 1.96*pred$se
+pred.high <- pred$fit + 1.96*pred$se
+c(pred.low, pred.high)
+confinterval <- c(ilogit(pred.low), ilogit(pred.high))
+cat("Our confidence interval is: ", confinterval)
+
+
+```
+\pagebreak
+```{r}
+false.neg <- rep(0, length(Class))
+false.pos <- rep(0, length(Class))
+error.matrix <- as.data.frame(cbind(Class, AIC_b$fitted.values, false.neg, false.pos))
+
+benign_prop = .5
+for (i in 1:length(false.neg)) {
+  if (error.matrix$Class[i] == 0 && (error.matrix$V2[i] > benign_prop)) error.matrix$false.neg[i] <- 1 
+  if (error.matrix$Class[i] == 1 && (error.matrix$V2[i] < benign_prop)) error.matrix$false.pos[i] <- 1 
+}
+
+sum(error.matrix$false.pos==1) #8
+sum(error.matrix$false.neg==1) #10
+
+cat("False positives: ", sum(error.matrix$false.pos==1), "\n")
+cat("False negatives: ", sum(error.matrix$false.neg==1), "\n")
+
+```
+
+\pagebreak
+```{r}
+false.neg <- rep(0, length(Class))
+false.pos <- rep(0, length(Class))
+error.matrix <- as.data.frame(cbind(Class, best.t.glm$fitted.values, false.neg, false.pos))
+
+benign_prop = .9
+for (i in 1:length(false.neg)) {
+  if (error.matrix$Class[i] == 0 && (error.matrix$V2[i] > benign_prop)) error.matrix$false.neg[i] <- 1 
+  if (error.matrix$Class[i] == 1 && (error.matrix$V2[i] < benign_prop)) error.matrix$false.pos[i] <- 1 
+}
+
+sum(error.matrix$false.pos==1) #15
+sum(error.matrix$false.neg==1) #1
+
+cat("False positives: ", sum(error.matrix$false.pos==1), "\n")
+cat("False negatives: ", sum(error.matrix$false.neg==1), "\n")
+
+```
+
+\pagebreak
+```{r}
+######Create two datasets######
+testing.data <- as.data.frame(matrix(nrow = 0, ncol= ncol(tumor)))
+training.data <- as.data.frame(matrix(nrow = 0, ncol = ncol(tumor)))
+colnames(testing.data) <- colnames(tumor); colnames(training.data) <- colnames(tumor)
+
+for(i in 1:length(tumor$Class)) {
+  if(i %% 3 == 0) testing.data[nrow(testing.data) + 1,] = tumor[i,]
+  else training.data[nrow(training.data) + 1,] = tumor[i,]
+}
+
+######Find Model with training data######
+train.start <- glm(formula = Class~., family = binomial, data = training.data)
+glm.training <- step(train.start, scope=list(upper=~ Adhesion + BNuclei + Chromat + Epithel + Mitoses 
+                                + NNucleo + ClThick + UShape + UCSize), 
+              direction="both", data=training.data)
+
+#Class ~ BNuclei + NNucleo + ClThick + UCSize
+#AIC = 78.44
+
+glm.testing <- glm(formula = Class ~ BNuclei + NNucleo + ClThick + UCSize, family = binomial, tumor)
+
+
+#######Test Model######
+##Create Dataframe##
+pos.cut <-seq(0,1,by=.05)
+pos.cut.df <- as.data.frame(matrix(nrow = length(pos.cut), ncol= 2))
+colnames(pos.cut.df) <- c("Possible Cutoff", "Sum of Errors")
+pos.cut.df["Possible Cutoff"] <- pos.cut
+pos.cut.df$`Sum of Errors` <- rep(0, length(pos.cut.df$`Sum of Errors`))
+
+
+error.matrix <- as.data.frame(cbind(Class, glm.testing$fitted.values))
+
+#weighted fp & fn because a false negative is worse
+fpw <- 1
+fnw <- 1.5
+
+for (j in 1:length(pos.cut)) {
+  false.neg <- 0
+  false.pos <- 0
+  benign_prop = pos.cut[j]
+  for (i in 1:length(error.matrix$V2)) {
+    if (error.matrix$Class[i] == 0 && (error.matrix$V2[i] > benign_prop)) false.neg = false.neg + 1 
+    if (error.matrix$Class[i] == 1 && (error.matrix$V2[i] < benign_prop)) false.pos = false.pos + 1
+  }
+
+  pos.cut.df[j,2] = (fnw*false.neg + fpw*false.pos)
+}
+##test##
+cat("The cut-off should be: ")
+pos.cut.df$`Possible Cutoff`[which.min(pos.cut.df$`Sum of Errors`)]
+
+
+
+```
+
+
+
+
